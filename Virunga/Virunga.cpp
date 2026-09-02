@@ -1082,9 +1082,30 @@ void ShowCleanBanner() {
     printf("##############################################################################\n");
     printf("[*] Targeted Architecture: Windows 11 x64\n");
 }
+
+[[nodiscard]] bool IsProcessElevated() noexcept {
+    BOOL elevated = FALSE;
+    HANDLE hToken = nullptr;
+
+    if (::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        TOKEN_ELEVATION elevation{};
+        DWORD cbSize = sizeof(TOKEN_ELEVATION);
+
+        if (::GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize)) {
+            elevated = elevation.TokenIsElevated;
+        }
+        ::CloseHandle(hToken);
+    }
+    return elevated != FALSE;
+}
+
 int main()
 {
     ShowCleanBanner();
+    if (!IsProcessElevated()) {
+        printf("[!] DetectorOneEngine requires Administrator privileges to open kernel symlinks.\n");
+        return 1;
+    }
 
     HMODULE hNtos = LoadLibraryW(L"ntoskrnl.exe");
 
