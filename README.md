@@ -81,7 +81,7 @@ Virunga runs from user mode but requires a kernel primitive exposed by the `WinI
 Virunga.exe
     |
     v
-\\.\WinIo
+\\.\XXX
     |
     v
 Physical memory mapping
@@ -97,7 +97,7 @@ Kernel address translation
 The current code opens:
 
 ```text
-\\.\WinIo
+\\.\XXX
 ```
 
 and uses these IOCTL values:
@@ -208,19 +208,19 @@ The intended success condition is not that Virunga "wins". The intended success 
 From a Developer Command Prompt:
 
 ```powershell
-msbuild "C:\Users\ultim\source\repos\Virunga\Virunga.sln" /p:Configuration=Release /p:Platform=x64
+msbuild "C:\Users\xxx\source\repos\Virunga\Virunga.sln" /p:Configuration=Release /p:Platform=x64
 ```
 
 Expected output:
 
 ```text
-C:\Users\ultim\source\repos\Virunga\x64\Release\Virunga.exe
+C:\Users\xxx\source\repos\Virunga\x64\Release\Virunga.exe
 ```
 
 Debug build:
 
 ```powershell
-msbuild "C:\Users\ultim\source\repos\Virunga\Virunga.sln" /p:Configuration=Debug /p:Platform=x64
+msbuild "C:\Users\xxx\source\repos\Virunga\Virunga.sln" /p:Configuration=Debug /p:Platform=x64
 ```
 
 ---
@@ -230,7 +230,7 @@ msbuild "C:\Users\ultim\source\repos\Virunga\Virunga.sln" /p:Configuration=Debug
 Virunga must be launched from an elevated console.
 
 ```powershell
-C:\Users\ultim\source\repos\Virunga\x64\Release\Virunga.exe
+C:\Users\xxx\source\repos\Virunga\x64\Release\Virunga.exe
 ```
 
 If `\\.\WinIo` is not available, Virunga cannot map physical memory and will fail early:
