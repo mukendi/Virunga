@@ -5,7 +5,6 @@
 #include <Windows.h>
 #include <psapi.h>
 #include <winternl.h>
-#include <ntstatus.h>
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <tchar.h>
@@ -15,8 +14,8 @@
 
 #define OFF_FRAME_FILTERS 0xB0    // 0x48 (RegisteredFilters) + 0x68 (rList)
 #define OFF_FRAME_VOLUMES 0x130   // 0xC8 (AttachedVolumes) + 0x68 (rList)
-#define OFF_FILTER_NAME    0x40    // Name dans _FLT_FILTER
-#define OFF_FILTER_LINKS   0x10    // 
+#define OFF_FILTER_NAME    0x40    // Name field inside _FLT_FILTER
+#define OFF_FILTER_LINKS   0x10    // Primary list links inside _FLT_FILTER
 
 //#define ACTIVE_PROCESS_LINKS_OFFSET 0x1d8 - Win11 25h2
 //#define IMAGE_FILE_NAME_OFFSET 0x338 - Win11 25h2
@@ -38,7 +37,7 @@ typedef struct PHYSICAL_MEMORY_READ {
 }PHYSICAL_MEMORY_READ, * PPHYSICAL_MEMORY_READ;
 
 typedef struct _EDR_CALLBACK_NODE {
-    UINT64 NodeAddress;      // Adresse du _CALLBACK_NODE
+    UINT64 NodeAddress;      // Address of the callback node
     UINT64 OriginalFlink;
     UINT64 OriginalBlink;
     CHAR DriverName[32];
