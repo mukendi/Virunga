@@ -1,6 +1,11 @@
 # Virunga
 
-> Virunga is a Windows x64 research tool built to validate DetectorOne resilience against callback-blinding techniques.
+![Project](https://img.shields.io/badge/Project-Virunga-1B4D3E)
+![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078D6?logo=windows&logoColor=white)
+![Language](https://img.shields.io/badge/Language-C%2B%2B%20Kernel-00599C?logo=cplusplus&logoColor=white)
+![License](https://img.shields.io/badge/License-Research-555555)
+
+> Virunga is a Windows kernel security research tool designed to demonstrate BYOVD (Bring Your Own Vulnerable Driver) mechanics and EDR telemetry suppression. Built to help security researchers and Purple Teams validate, benchmark, and strengthen kernel-level detection capabilities.
 
 ---
 
@@ -75,7 +80,7 @@ Virunga
 
 # Execution Model
 
-Virunga runs from user mode but requires a kernel primitive exposed by the `WinIo` device interface.
+Virunga runs from user mode but requires a kernel primitive exposed by the `xxxx` device interface.
 
 ```text
 Virunga.exe
@@ -197,7 +202,7 @@ The intended success condition is not that Virunga "wins". The intended success 
 - MSVC platform toolset `v143`.
 - Windows SDK.
 - Administrator privileges at runtime.
-- A lab-only vulnerable driver exposing the `\\.\WinIo` device interface.
+- A lab-only vulnerable driver exposing the `\\.\xxxx` device interface.
 - Kernel debugging strongly recommended.
 - Snapshot or rollback capability strongly recommended.
 
@@ -233,7 +238,6 @@ Virunga must be launched from an elevated console.
 C:\Users\xxx\source\repos\Virunga\x64\Release\Virunga.exe
 ```
 
-If `\\.\WinIo` is not available, Virunga cannot map physical memory and will fail early:
 
 ```text
 [!] Loading driver failed with error : <GetLastError>
@@ -253,7 +257,7 @@ main
  |
  +--> Load local ntoskrnl.exe
  |
- +--> Open \\.\WinIo
+ +--> Open \\.\Driver
  |
  +--> Map physical memory
  |
