@@ -80,7 +80,7 @@ Virunga
 
 # Execution Model
 
-Virunga runs from user mode but requires a kernel primitive exposed by the `WinIo` device interface.
+Virunga runs from user mode but requires a kernel primitive exposed by the `xxxx` device interface.
 
 ```text
 Virunga.exe
@@ -202,7 +202,7 @@ The intended success condition is not that Virunga "wins". The intended success 
 - MSVC platform toolset `v143`.
 - Windows SDK.
 - Administrator privileges at runtime.
-- A lab-only vulnerable driver exposing the `\\.\WinIo` device interface.
+- A lab-only vulnerable driver exposing the `\\.\xxxx` device interface.
 - Kernel debugging strongly recommended.
 - Snapshot or rollback capability strongly recommended.
 
@@ -238,7 +238,6 @@ Virunga must be launched from an elevated console.
 C:\Users\xxx\source\repos\Virunga\x64\Release\Virunga.exe
 ```
 
-If `\\.\WinIo` is not available, Virunga cannot map physical memory and will fail early:
 
 ```text
 [!] Loading driver failed with error : <GetLastError>
@@ -258,7 +257,7 @@ main
  |
  +--> Load local ntoskrnl.exe
  |
- +--> Open \\.\WinIo
+ +--> Open \\.\Driver
  |
  +--> Map physical memory
  |
